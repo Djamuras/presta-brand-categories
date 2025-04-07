@@ -3,7 +3,7 @@
  * Brand Category Module for PrestaShop
  *
  * @package   BrandCategoryModule
- * @version   1.0.1
+ * @version   1.0.2
  * @author    Your Name
  * @copyright Your Company
  * @license   MIT
@@ -19,7 +19,7 @@ class BrandCategoryModule extends Module
     {
         $this->name = 'brandcategorymodule';
         $this->tab = 'administration';
-        $this->version = '1.0.1';
+        $this->version = '1.0.2';
         $this->author = 'Your Name';
         $this->need_instance = 0;
         $this->ps_versions_compliancy = [
@@ -41,7 +41,8 @@ class BrandCategoryModule extends Module
             $this->registerHook('displayAdminProductsExtra') &&
             $this->registerHook('actionProductUpdate') &&
             $this->registerHook('displayBrandContent') &&
-            $this->registerHook('actionFrontControllerSetMedia');
+            $this->registerHook('actionFrontControllerSetMedia') &&
+            $this->registerHook('displayAdminProductsMainStepRightColumnBottom');
     }
 
     public function uninstall()
@@ -138,6 +139,54 @@ class BrandCategoryModule extends Module
     }
 
     /**
+     * Display brand categories in product creation/edit form (alternative hook)
+     */
+    public function hookDisplayAdminProductsMainStepRightColumnBottom($params)
+    {
+        // Get current product ID (0 for new product)
+        $id_product = (int)$params['id_product'];
+
+        // If editing an existing product, get its manufacturer
+        $manufacturer_id = 0;
+        if ($id_product > 0) {
+            $product = new Product($id_product);
+            $manufacturer_id = $product->id_manufacturer;
+        }
+
+        // Get all manufacturers
+        $manufacturers = Manufacturer::getManufacturers();
+
+        // Get current product's brand categories
+        $current_brand_categories = $this->getProductBrandCategories($id_product);
+
+        // Get brand categories for the product's manufacturer
+        $brand_categories = Db::getInstance()->executeS(
+            'SELECT bc.*, m.name as manufacturer_name 
+            FROM '._DB_PREFIX_.'brand_category bc
+            INNER JOIN '._DB_PREFIX_.'manufacturer m ON bc.id_manufacturer = m.id_manufacturer
+            WHERE bc.active = 1 
+            ' . ($manufacturer_id > 0 ? 'AND bc.id_manufacturer = '.(int)$manufacturer_id : '') . '
+            ORDER BY m.name, bc.name'
+        );
+
+        // Group brand categories by manufacturer
+        $grouped_categories = [];
+        foreach ($brand_categories as $category) {
+            $grouped_categories[$category['manufacturer_name']][] = $category;
+        }
+
+        // Assign to smarty
+        $this->context->smarty->assign([
+            'manufacturers' => $manufacturers,
+            'grouped_categories' => $grouped_categories,
+            'current_brand_categories' => $current_brand_categories,
+            'product_id' => $id_product
+        ]);
+
+        return $this->display(__FILE__, 'views/templates/admin/product_brand_categories.tpl');
+    }
+
+    /**
      * Save brand categories when product is updated
      */
     public function hookActionProductUpdate($params)
@@ -145,22 +194,46 @@ class BrandCategoryModule extends Module
         $id_product = (int)$params['id_product'];
         $brand_categories = Tools::getValue('brand_categories', []);
 
-        // Remove existing brand category associations
-        Db::getInstance()->delete(
-            'brand_category_product', 
-            'id_product = '.(int)$id_product
-        );
+        try {
+            // Remove existing brand category associations
+            Db::getInstance()->delete(
+                'brand_category_product', 
+                'id_product = '.(int)$id_product
+            );
 
-        // Add new brand category associations
-        if (!empty($brand_categories)) {
-            $insert_data = [];
-            foreach ($brand_categories as $id_brand_category) {
-                $insert_data[] = [
-                    'id_brand_category' => (int)$id_brand_category,
-                    'id_product' => (int)$id_product
-                ];
+            // Add new brand category associations
+            if (!empty($brand_categories)) {
+                $insert_data = [];
+                foreach ($brand_categories as $id_brand_category) {
+                    $insert_data[] = [
+                        'id_brand_category' => (int)$id_brand_category,
+                        'id_product' => (int)$id_product
+                    ];
+                }
+                
+                // Validate categories belong to product's manufacturer
+                $product = new Product($id_product);
+                $valid_categories = Db::getInstance()->executeS(
+                    'SELECT id_brand_category FROM '._DB_PREFIX_.'brand_category 
+                    WHERE id_manufacturer = '.(int)$product->id_manufacturer
+                );
+                
+                $valid_category_ids = array_column($valid_categories, 'id_brand_category');
+                
+                $filtered_insert_data = array_filter($insert_data, function($item) use ($valid_category_ids) {
+                    return in_array($item['id_brand_category'], $valid_category_ids);
+                });
+
+                if (!empty($filtered_insert_data)) {
+                    Db::getInstance()->insert('brand_category_product', $filtered_insert_data);
+                }
             }
-            Db::getInstance()->insert('brand_category_product', $insert_data);
+        } catch (Exception $e) {
+            // Log error or handle it as needed
+            PrestaShopLogger::addLog(
+                'Brand Category Module: Error updating product categories - ' . $e->getMessage(), 
+                3 // Error level
+            );
         }
     }
 
@@ -324,13 +397,13 @@ class BrandCategoryModule extends Module
             WHERE bcp.id_brand_category = '.(int)$id_brand_category.'
             AND p.active = 1
         ';
-
+    
         if ($limit) {
             $sql .= ' LIMIT '.(int)$limit;
         }
-
+    
         $products = Db::getInstance()->executeS($sql);
-
+    
         // Prepare products with full details
         $prepared_products = [];
         foreach ($products as $product) {
@@ -355,10 +428,10 @@ class BrandCategoryModule extends Module
                 'reference' => $product['reference']
             ];
         }
-
+    
         return $prepared_products;
     }
-
+    
     /**
      * Add frontend CSS for brand categories
      */
@@ -374,4 +447,3 @@ class BrandCategoryModule extends Module
             ]
         );
     }
-}

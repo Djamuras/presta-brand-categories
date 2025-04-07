@@ -6,6 +6,8 @@ class BrandCategoryModuleBrandCategoryController extends ModuleFrontController
 {
     public $brand_category;
     public $manufacturer;
+    public $products;
+    public $pagination;
 
     public function init()
     {
@@ -13,6 +15,8 @@ class BrandCategoryModuleBrandCategoryController extends ModuleFrontController
 
         // Get brand category ID from URL
         $id_brand_category = (int)Tools::getValue('id_brand_category');
+        $page = (int)Tools::getValue('page', 1);
+        $products_per_page = 12; // Configurable number of products per page
 
         // Validate brand category
         if (!$id_brand_category) {
@@ -38,6 +42,24 @@ class BrandCategoryModuleBrandCategoryController extends ModuleFrontController
             $this->brand_category['id_manufacturer'], 
             $this->context->language->id
         );
+
+        // Count total products
+        $total_products = Db::getInstance()->getValue('
+            SELECT COUNT(DISTINCT p.id_product)
+            FROM '._DB_PREFIX_.'brand_category_product bcp
+            INNER JOIN '._DB_PREFIX_.'product p 
+                ON bcp.id_product = p.id_product
+            WHERE bcp.id_brand_category = '.(int)$id_brand_category.'
+            AND p.active = 1
+        ');
+
+        // Calculate pagination
+        $this->pagination = [
+            'page' => $page,
+            'products_per_page' => $products_per_page,
+            'total_products' => $total_products,
+            'total_pages' => ceil($total_products / $products_per_page)
+        ];
     }
 
     public function initContent()
@@ -47,7 +69,10 @@ class BrandCategoryModuleBrandCategoryController extends ModuleFrontController
         // Get language ID
         $id_lang = (int)$this->context->language->id;
 
-        // Fetch products for this brand category
+        // Calculate offset for pagination
+        $offset = ($this->pagination['page'] - 1) * $this->pagination['products_per_page'];
+
+        // Fetch products for this brand category with pagination
         $products = Db::getInstance()->executeS('
             SELECT p.id_product, 
                    pl.name, 
@@ -65,7 +90,9 @@ class BrandCategoryModuleBrandCategoryController extends ModuleFrontController
                 ON p.id_product = img.id_product AND img.cover = 1
             WHERE bcp.id_brand_category = '.(int)$this->brand_category['id_brand_category'].'
             AND p.active = 1
-        ');
+            LIMIT '.(int)$this->pagination['products_per_page'].'
+            OFFSET '.(int)$offset
+        );
 
         // Prepare products with full details
         $prepared_products = [];
@@ -96,7 +123,8 @@ class BrandCategoryModuleBrandCategoryController extends ModuleFrontController
         $this->context->smarty->assign([
             'brand_category' => $this->brand_category,
             'manufacturer' => $this->manufacturer,
-            'products' => $prepared_products
+            'products' => $prepared_products,
+            'pagination' => $this->pagination
         ]);
 
         // Set template
