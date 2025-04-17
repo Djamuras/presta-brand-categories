@@ -203,30 +203,33 @@ class BrandCategoryModule extends Module
 
             // Add new brand category associations
             if (!empty($brand_categories)) {
-                $product = new Product($id_product);
                 $insert_data = [];
-                
                 foreach ($brand_categories as $id_brand_category) {
-                    // Validate that category belongs to product's manufacturer
-                    $category_exists = Db::getInstance()->getValue(
-                        'SELECT COUNT(*) FROM '._DB_PREFIX_.'brand_category 
-                        WHERE id_brand_category = '.(int)$id_brand_category.'
-                        AND id_manufacturer = '.(int)$product->id_manufacturer
-                    );
-
-                    if ($category_exists) {
-                        $insert_data[] = [
-                            'id_brand_category' => (int)$id_brand_category,
-                            'id_product' => (int)$id_product
-                        ];
-                    }
+                    $insert_data[] = [
+                        'id_brand_category' => (int)$id_brand_category,
+                        'id_product' => (int)$id_product
+                    ];
                 }
+                
+                // Validate categories belong to product's manufacturer
+                $product = new Product($id_product);
+                $valid_categories = Db::getInstance()->executeS(
+                    'SELECT id_brand_category FROM '._DB_PREFIX_.'brand_category 
+                    WHERE id_manufacturer = '.(int)$product->id_manufacturer
+                );
+                
+                $valid_category_ids = array_column($valid_categories, 'id_brand_category');
+                
+                $filtered_insert_data = array_filter($insert_data, function($item) use ($valid_category_ids) {
+                    return in_array($item['id_brand_category'], $valid_category_ids);
+                });
 
-                if (!empty($insert_data)) {
-                    Db::getInstance()->insert('brand_category_product', $insert_data);
+                if (!empty($filtered_insert_data)) {
+                    Db::getInstance()->insert('brand_category_product', $filtered_insert_data);
                 }
             }
         } catch (Exception $e) {
+            // Log error or handle it as needed
             PrestaShopLogger::addLog(
                 'Brand Category Module: Error updating product categories - ' . $e->getMessage(), 
                 3 // Error level
@@ -394,13 +397,13 @@ class BrandCategoryModule extends Module
             WHERE bcp.id_brand_category = '.(int)$id_brand_category.'
             AND p.active = 1
         ';
-
+    
         if ($limit) {
             $sql .= ' LIMIT '.(int)$limit;
         }
-
+    
         $products = Db::getInstance()->executeS($sql);
-
+    
         // Prepare products with full details
         $prepared_products = [];
         foreach ($products as $product) {
@@ -418,16 +421,17 @@ class BrandCategoryModule extends Module
                 'image_url' => $product['id_image'] 
                     ? Context::getContext()->link->getImageLink(
                         $product['link_rewrite'], 
-                        $product['id_image'home_default'
+                        $product['id_image'], 
+                        'home_default'
                     ) 
                     : null,
                 'reference' => $product['reference']
             ];
         }
-
+    
         return $prepared_products;
     }
-
+    
     /**
      * Add frontend CSS for brand categories
      */
@@ -443,4 +447,3 @@ class BrandCategoryModule extends Module
             ]
         );
     }
-}
